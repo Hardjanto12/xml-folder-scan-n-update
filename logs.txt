@@ -1,0 +1,2 @@
+2025-10-18 11:11:29 INFO Watching directory D:\Image\62001FS04
+2025-10-18 11:11:32 INFO Received shutdown signal, stopping observer
