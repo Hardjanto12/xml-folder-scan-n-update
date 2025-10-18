@@ -1,20 +1,21 @@
 # watch_and_post.py
 # pip install watchdog requests
 
-import time, json, logging
+import time, json, logging, threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from typing import Optional, Dict, Any
 
 import requests
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+from config_manager import load_config, get_app_base_dir
+
 # === CONFIG ===
-WATCH_DIR = Path(r"D:\Image\62001FS04")        # <-- change
-URL       = "http://10.226.52.32:8040/services/xRaySby/in"       # <-- change
 API_HEADERS = {
     "Content-Type": "application/json",      # server expects JSON with {"ftp_path","image_msg"}
     # "Authorization": "Bearer <token>",     # if needed
@@ -32,7 +33,10 @@ session = requests.Session()
 session.headers.update(API_HEADERS)
 
 
-LOG_FILE = Path(__file__).resolve().with_name("logs.txt")
+APP_BASE_DIR = get_app_base_dir()
+LOGS_DIR = APP_BASE_DIR / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOGS_DIR / "logs.txt"
 try:
     JAKARTA_TZ = ZoneInfo("Asia/Jakarta")
 except ZoneInfoNotFoundError:
@@ -75,6 +79,28 @@ def configure_logger() -> logging.Logger:
 
 
 logger = configure_logger()
+
+_config_cache: Dict[str, Any] = load_config()
+WATCH_DIR = Path(_config_cache["watch_dir"])
+URL = _config_cache["url"]
+
+
+def reload_runtime_config() -> Dict[str, Any]:
+    """Reloads configuration from disk and updates module-level globals."""
+    global _config_cache, WATCH_DIR, URL
+    _config_cache = load_config()
+    WATCH_DIR = Path(_config_cache["watch_dir"])
+    URL = _config_cache["url"]
+    log(f"Configuration reloaded: watch_dir={WATCH_DIR}, url={URL}")
+    return _config_cache.copy()
+
+
+def current_config() -> Dict[str, Any]:
+    """Returns the cached configuration (path converted to string)."""
+    return {
+        "watch_dir": str(WATCH_DIR),
+        "url": URL,
+    }
 
 
 def log(message: str, level: int = logging.INFO, *args, **kwargs) -> None:
@@ -166,18 +192,105 @@ class Handler(FileSystemEventHandler):
     def on_moved(self, event):
         if not event.is_directory: self._maybe_submit(Path(event.dest_path))
 
-def main():
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        observer = Observer()
-        observer.schedule(Handler(pool), str(WATCH_DIR), recursive=True)
-        observer.start()
-        log(f"Watching directory {WATCH_DIR}")
+class WatchService:
+    """
+    Controls the watchdog observer lifecycle so that consumers (like a GUI)
+    can start and stop the watcher on demand.
+    """
+    def __init__(self, watch_dir: Optional[Path | str] = None):
+        self._watch_dir = Path(watch_dir) if watch_dir else Path(WATCH_DIR)
+        self._executor = None
+        self._observer = None
+        self._lock = threading.Lock()
+
+    @property
+    def watch_dir(self) -> Path:
+        return self._watch_dir
+
+    def set_watch_dir(self, watch_dir: Path | str, restart: bool = True) -> bool:
+        """
+        Updates the watch directory. If the service is running it will restart
+        when restart=True (default).
+        """
+        new_path = Path(watch_dir)
+        with self._lock:
+            running = self._observer is not None and self._observer.is_alive()
+        if running:
+            self.stop()
+        with self._lock:
+            self._watch_dir = new_path
+        log(f"Watcher directory updated to {new_path}")
+        success = True
+        if restart and running:
+            success = self.start()
+        return success
+
+    def refresh_from_config(self, restart: bool = True) -> bool:
+        """Synchronizes the watch directory with the current module configuration."""
+        return self.set_watch_dir(Path(WATCH_DIR), restart=restart)
+
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._observer is not None and self._observer.is_alive()
+
+    def start(self) -> bool:
+        with self._lock:
+            if self._observer is not None and self._observer.is_alive():
+                log("Watcher already running", logging.INFO)
+                return False
+            executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+            if not self._watch_dir.exists():
+                executor.shutdown(wait=False)
+                log(f"Watch directory {self._watch_dir} does not exist", logging.ERROR)
+                return False
+            observer = Observer()
+            handler = Handler(executor)
+            try:
+                observer.schedule(handler, str(self._watch_dir), recursive=True)
+                observer.start()
+            except Exception:
+                executor.shutdown(wait=False)
+                logger.exception("Failed to start observer for %s", self._watch_dir)
+                raise
+            self._executor = executor
+            self._observer = observer
+        log(f"Watching directory {self._watch_dir}")
+        return True
+
+    def stop(self) -> bool:
+        with self._lock:
+            observer = self._observer
+            executor = self._executor
+            self._observer = None
+            self._executor = None
+        if observer is None:
+            return False
         try:
-            while True: time.sleep(1)
-        except KeyboardInterrupt:
             observer.stop()
-            log("Received shutdown signal, stopping observer", logging.INFO)
-        observer.join()
+            observer.join(timeout=5)
+            if observer.is_alive():
+                log("Observer did not stop within timeout", logging.WARNING)
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False)
+        log("Watcher stopped")
+        return True
+
+def main():
+    service = WatchService()
+    try:
+        started = service.start()
+    except Exception:
+        logger.exception("Unable to start watch service")
+        return
+    if not started:
+        return
+    try:
+        while True: time.sleep(1)
+    except KeyboardInterrupt:
+        log("Received shutdown signal, stopping observer", logging.INFO)
+    finally:
+        service.stop()
 
 if __name__ == "__main__":
     main()

@@ -1,2 +1,10 @@
 2025-10-18 11:11:29 INFO Watching directory D:\Image\62001FS04
 2025-10-18 11:11:32 INFO Received shutdown signal, stopping observer
+2025-10-18 11:26:53 INFO Start requested from GUI
+2025-10-18 11:26:53 INFO Watching directory D:\Image\62001FS04
+2025-10-18 11:26:55 INFO Stop requested from GUI
+2025-10-18 11:26:55 INFO Watcher stopped
+2025-10-18 11:26:57 INFO Start requested from GUI
+2025-10-18 11:26:57 INFO Watching directory D:\Image\62001FS04
+2025-10-18 11:26:59 INFO Stop requested from GUI
+2025-10-18 11:26:59 INFO Watcher stopped
