@@ -11,11 +11,13 @@ Convert Nuctech-style IDR XML into a JSON payload with:
 Usage:
   python convert_idr_xml.py input.xml --out out_dir
   python convert_idr_xml.py /path/to/folder --out out_dir
+  python convert_idr_xml.py input.xml --ftp-base export
 
 Notes:
 - Handles UTF-8 / UTF-16 XML.
 - If input is a folder, processes all *.xml recursively.
 - Output filename pattern: <PICNO or input-stem>.json
+- FTP path root defaults to /import; set --ftp-base export to use /export.
 """
 from __future__ import annotations
 import sys, re, json, html, argparse
@@ -162,11 +164,19 @@ def collect_siig_blocks(idr_img: ET.Element) -> List[SiigBlock]:
         blocks.append(SiigBlock(id=sid, type=stype, operation_time=optime, scanimgs=scans, element=siig))
     return blocks
 
-def ensure_ftp_path(path: str) -> str:
+def ensure_ftp_path(path: str, base: str = "import") -> str:
     p = path.strip()
     if not p.startswith('/'):
         p = '/' + p
-    return p if p.startswith('/import/') else f"/import{p}"
+    base_clean = base.strip('/') or ''
+    if not base_clean:
+        return p
+    base_prefix = f"/{base_clean}/"
+    if p == f"/{base_clean}":
+        return p
+    if p.startswith(base_prefix):
+        return p
+    return base_prefix + p.lstrip('/')
 
 def device_no_from(picno: str, path: str) -> str:
     segment = ''
@@ -180,7 +190,7 @@ def device_no_from(picno: str, path: str) -> str:
         return m.group(1)
     return ''
 
-def build_image_msg(root: ET.Element) -> Tuple[str, str]:
+def build_image_msg(root: ET.Element, ftp_base: str) -> Tuple[str, str]:
     idr_img = root.find('./IDR_IMAGE')
     if idr_img is None:
         raise ValueError("Missing <IDR_IMAGE>")
@@ -282,14 +292,14 @@ def build_image_msg(root: ET.Element) -> Tuple[str, str]:
     append_line(lines, 0, "</IDR>")
 
     image_msg_xml = "\n".join(lines)
-    ftp_path = ensure_ftp_path(path) if path else ""
+    ftp_path = ensure_ftp_path(path, ftp_base) if path else ""
     return ftp_path, image_msg_xml
 
-def process_one(xml_path: Path, out_dir: Path) -> Optional[Path]:
+def process_one(xml_path: Path, out_dir: Path, ftp_base: str) -> Optional[Path]:
     try:
         xml_text = detect_and_read(xml_path)
         root = ET.fromstring(strip_ns(xml_text))
-        ftp_path, image_msg_xml = build_image_msg(root)
+        ftp_path, image_msg_xml = build_image_msg(root, ftp_base)
 
         # Determine output name: prefer PICNO
         idr_img = root.find('./IDR_IMAGE')
@@ -316,6 +326,12 @@ def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="Convert IDR XML -> JSON (ftp_path, image_msg).")
     ap.add_argument("input", help="XML file or folder containing XMLs")
     ap.add_argument("--out", default="out", help="Output folder (default: ./out)")
+    ap.add_argument(
+        "--ftp-base",
+        choices=["import", "export"],
+        default="import",
+        help="Root directory to prefix onto FTP paths (default: import).",
+    )
     args = ap.parse_args(argv)
 
     in_path = Path(args.input)
@@ -333,7 +349,7 @@ def main(argv: List[str]) -> int:
 
     ok = 0
     for xp in xml_files:
-        if process_one(xp, out_dir):
+        if process_one(xp, out_dir, args.ftp_base):
             ok += 1
 
     print(f"Done. Converted {ok}/{len(xml_files)} file(s). Output dir: {out_dir}")

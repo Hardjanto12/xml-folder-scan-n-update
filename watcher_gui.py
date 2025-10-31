@@ -84,8 +84,11 @@ class WatcherApp:
         self.status_var = tk.StringVar(value="Status: Stopped")
         self.watch_info_var = tk.StringVar(value=f"Watching directory: {self.service.watch_dir}")
         self.url_info_var = tk.StringVar(value=f"POST endpoint: {self._config['url']}")
+        ftp_base = self._config.get("ftp_base", "import")
+        self.ftp_info_var = tk.StringVar(value=f"FTP root: /{ftp_base}")
         self.settings_watch_dir_var = tk.StringVar(value=self._config["watch_dir"])
         self.settings_url_var = tk.StringVar(value=self._config["url"])
+        self.settings_ftp_base_var = tk.StringVar(value=ftp_base)
 
         self._status_job = None
         self._tray_icon = None
@@ -113,6 +116,7 @@ class WatcherApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Unmap>", self._on_unmap, add="+")
         self.root.bind("<Map>", self._on_map, add="+")
+        self.root.after_idle(self._auto_start_on_launch)
 
     def _build_styles(self) -> None:
         style = ttk.Style()
@@ -157,6 +161,7 @@ class WatcherApp:
         path_info = ttk.Frame(main, style="Office.TFrame")
         path_info.pack(fill="x")
         ttk.Label(path_info, textvariable=self.watch_info_var, style="Office.TLabel", wraplength=720).pack(anchor="w")
+        ttk.Label(path_info, textvariable=self.ftp_info_var, style="Office.TLabel", wraplength=720).pack(anchor="w", pady=(2, 0))
         ttk.Label(path_info, textvariable=self.url_info_var, style="Office.TLabel", wraplength=720).pack(anchor="w", pady=(2, 0))
 
         ttk.Separator(main).pack(fill="x", pady=(18, 12))
@@ -212,6 +217,15 @@ class WatcherApp:
         url_entry = ttk.Entry(form, textvariable=self.settings_url_var)
         url_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0))
 
+        ttk.Label(form, text="FTP base", style="Office.TLabel").grid(row=2, column=0, sticky="w", pady=4)
+        ftp_combo = ttk.Combobox(
+            form,
+            textvariable=self.settings_ftp_base_var,
+            values=("import", "export"),
+            state="readonly",
+        )
+        ftp_combo.grid(row=2, column=1, sticky="w", padx=(10, 0))
+
         ttk.Label(
             container,
             text="Settings are saved to settings.json next to the executable. Updates restart the watcher if it is running.",
@@ -239,18 +253,24 @@ class WatcherApp:
     def _update_config_views(self, config: dict) -> None:
         self.watch_info_var.set(f"Watching directory: {config['watch_dir']}")
         self.url_info_var.set(f"POST endpoint: {config['url']}")
+        ftp_base = config.get("ftp_base", "import")
+        self.ftp_info_var.set(f"FTP root: /{ftp_base}")
         self.settings_watch_dir_var.set(config["watch_dir"])
         self.settings_url_var.set(config["url"])
+        self.settings_ftp_base_var.set(ftp_base)
 
     def save_settings(self) -> None:
         watch_dir = self.settings_watch_dir_var.get().strip()
         url = self.settings_url_var.get().strip()
+        ftp_base = self.settings_ftp_base_var.get().strip().lower()
 
         issues = []
         if not watch_dir:
             issues.append("- Watch folder is required.")
         if not url:
             issues.append("- Service URL is required.")
+        if ftp_base not in ("import", "export"):
+            issues.append("- FTP base must be either 'import' or 'export'.")
         if issues:
             messagebox.showerror("Settings", "\n".join(issues), parent=self.root)
             return
@@ -266,7 +286,7 @@ class WatcherApp:
                 return
 
         try:
-            update_config(watch_dir=watch_dir, url=url)
+            update_config(watch_dir=watch_dir, url=url, ftp_base=ftp_base)
         except Exception as exc:
             logger.exception("Failed to save configuration changes")
             messagebox.showerror("Settings", f"Failed to save settings:\n{exc}", parent=self.root)
@@ -304,6 +324,12 @@ class WatcherApp:
                     self.log_display.see("end")
         except OSError as exc:
             self.log_display.insert("end", f"Unable to read existing logs: {exc}\n", "logWarning")
+
+    def _auto_start_on_launch(self) -> None:
+        if self.service.is_running():
+            return
+        log("Watcher auto-start requested on launch")
+        self.start_watcher()
 
     def _apply_status(self) -> None:
         running = self.service.is_running()

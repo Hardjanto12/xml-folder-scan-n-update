@@ -13,7 +13,12 @@ import requests
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from config_manager import load_config, get_app_base_dir
+from config_manager import (
+    load_config,
+    get_app_base_dir,
+    DEFAULT_FTP_BASE,
+    VALID_FTP_BASES,
+)
 
 # === CONFIG ===
 API_HEADERS = {
@@ -31,6 +36,14 @@ from xml.etree import ElementTree as ET
 
 session = requests.Session()
 session.headers.update(API_HEADERS)
+
+
+def _normalize_ftp_base(value: Any) -> str:
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in VALID_FTP_BASES:
+            return candidate
+    return DEFAULT_FTP_BASE
 
 
 APP_BASE_DIR = get_app_base_dir()
@@ -83,15 +96,18 @@ logger = configure_logger()
 _config_cache: Dict[str, Any] = load_config()
 WATCH_DIR = Path(_config_cache["watch_dir"])
 URL = _config_cache["url"]
+FTP_BASE = _normalize_ftp_base(_config_cache.get("ftp_base"))
 
 
 def reload_runtime_config() -> Dict[str, Any]:
     """Reloads configuration from disk and updates module-level globals."""
-    global _config_cache, WATCH_DIR, URL
+    global _config_cache, WATCH_DIR, URL, FTP_BASE
     _config_cache = load_config()
     WATCH_DIR = Path(_config_cache["watch_dir"])
     URL = _config_cache["url"]
-    log(f"Configuration reloaded: watch_dir={WATCH_DIR}, url={URL}")
+    FTP_BASE = _normalize_ftp_base(_config_cache.get("ftp_base"))
+    _config_cache["ftp_base"] = FTP_BASE
+    log(f"Configuration reloaded: watch_dir={WATCH_DIR}, url={URL}, ftp_base={FTP_BASE}")
     return _config_cache.copy()
 
 
@@ -100,6 +116,7 @@ def current_config() -> Dict[str, Any]:
     return {
         "watch_dir": str(WATCH_DIR),
         "url": URL,
+        "ftp_base": FTP_BASE,
     }
 
 
@@ -128,7 +145,7 @@ def convert_xml_to_payload(xml_path: Path) -> dict:
     """
     xml_text = detect_and_read(xml_path)
     root = ET.fromstring(strip_ns(xml_text))
-    ftp_path, image_msg_xml = build_image_msg(root)
+    ftp_path, image_msg_xml = build_image_msg(root, FTP_BASE)
     return {"ftp_path": ftp_path, "image_msg": image_msg_xml}
 
 def send_payload(payload: dict) -> requests.Response:

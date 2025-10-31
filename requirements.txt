@@ -1,0 +1,9 @@
+# Runtime dependencies
+requests>=2.31.0
+watchdog>=4.0.0
+pystray>=0.19.5
+Pillow>=10.0.0
+tzdata>=2023.3
+
+# Build tooling (optional)
+pyinstaller>=6.0.0

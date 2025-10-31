@@ -14,9 +14,13 @@ import threading
 from pathlib import Path
 from typing import Dict, Any
 
+DEFAULT_FTP_BASE = "import"
+VALID_FTP_BASES = {"import", "export"}
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "watch_dir": r"D:\Image\62001FS04",
     "url": "http://10.226.52.32:8040/services/xRaySby/in",
+    "ftp_base": DEFAULT_FTP_BASE,
 }
 
 def get_app_base_dir() -> Path:
@@ -40,6 +44,10 @@ def _merge_with_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
     merged = DEFAULT_CONFIG.copy()
     for key, value in data.items():
         if value is None:
+            continue
+        if key == "ftp_base":
+            candidate = str(value).strip().lower()
+            merged[key] = candidate if candidate in VALID_FTP_BASES else DEFAULT_FTP_BASE
             continue
         merged[key] = value
     return merged
