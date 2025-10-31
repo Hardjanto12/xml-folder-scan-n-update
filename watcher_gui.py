@@ -2,9 +2,12 @@
 # Tkinter interface for watch_and_post.py
 
 import logging
+import socket
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
+from typing import Optional
 from tkinter import ttk, messagebox, filedialog
 from tkinter.scrolledtext import ScrolledText
 
@@ -26,6 +29,67 @@ log = backend.log
 logger = backend.logger
 reload_runtime_config = backend.reload_runtime_config
 current_config = backend.current_config
+
+
+SINGLE_INSTANCE_PORT = 52321
+_SINGLE_INSTANCE_SOCKET: Optional[socket.socket] = None
+
+
+def acquire_single_instance() -> bool:
+    global _SINGLE_INSTANCE_SOCKET
+    if _SINGLE_INSTANCE_SOCKET is not None:
+        return True
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if sys.platform != "win32":
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
+        sock.listen(1)
+    except OSError:
+        sock.close()
+        return False
+
+    _SINGLE_INSTANCE_SOCKET = sock
+    return True
+
+
+def release_single_instance() -> None:
+    global _SINGLE_INSTANCE_SOCKET
+    sock = _SINGLE_INSTANCE_SOCKET
+    if sock is None:
+        return
+    try:
+        sock.close()
+    except OSError:
+        pass
+    _SINGLE_INSTANCE_SOCKET = None
+
+
+def ensure_single_instance() -> bool:
+    if acquire_single_instance():
+        return True
+    tmp_root: Optional[tk.Tk] = None
+    try:
+        tmp_root = tk.Tk()
+        tmp_root.withdraw()
+        messagebox.showerror(
+            "Already Running",
+            "Another instance of XML Watcher Control Center is already running.",
+            parent=tmp_root,
+        )
+    except Exception:
+        print(
+            "Another instance of XML Watcher Control Center is already running.",
+            file=sys.stderr,
+        )
+    finally:
+        if tmp_root is not None:
+            try:
+                tmp_root.destroy()
+            except Exception:
+                pass
+    return False
 
 
 class TextHandler(logging.Handler):
@@ -502,9 +566,15 @@ class WatcherApp:
 
 
 def main() -> None:
+    if not ensure_single_instance():
+        return
+
     root = tk.Tk()
-    WatcherApp(root)
-    root.mainloop()
+    try:
+        WatcherApp(root)
+        root.mainloop()
+    finally:
+        release_single_instance()
 
 
 if __name__ == "__main__":
