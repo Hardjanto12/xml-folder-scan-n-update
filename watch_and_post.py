@@ -168,7 +168,68 @@ def handle_xml(path: Path):
         log(f"{path.name} left in place due to conversion error", logging.ERROR)
         return
 
-    # 3) POST (with small retry/backoff)
+    # 3) Check MTI Web if enabled
+    skip_existing = _config_cache.get("skip_existing", True)
+    if skip_existing:
+        try:
+            # Parse XML for container_no
+            xml_text = detect_and_read(path)
+            root = ET.fromstring(strip_ns(xml_text))
+            idr_img = root.find('./IDR_IMAGE')
+            container_no = ""
+            if idr_img is not None:
+                picno = (idr_img.findtext('PICNO') or '').strip()
+                # The tag in the XML is lowercase <container_no>
+                container_elem = root.find('.//IDR_SII_INPUTINFO_CONTAINER/container_no')
+                if container_elem is None:
+                    container_elem = root.find('.//IDR_SII_INPUTINFO_CONTAINER/CONTAINER_NO')
+                    
+                if container_elem is not None and (container_elem.text or '').strip():
+                    container_no = (container_elem.text or '').strip()
+                else:
+                    container_no = picno
+                    
+            if container_no:
+                log(f"Checking MTI Web for container {container_no}")
+                action = 'get_export' if FTP_BASE == 'export' else 'get_import'
+                API_URL = 'http://10.226.52.34/dashxray/service/webservice.php'
+                data = {
+                    'action': action,
+                    'module': FTP_BASE,
+                    'draw': '1',
+                    'start': '0',
+                    'length': '10',
+                    'cont_no': container_no,
+                    'doc_no': ''
+                }
+                if FTP_BASE == 'import':
+                    data['imp_doc'] = ''
+                else:
+                    data['exp_doc'] = ''
+                    
+                resp = requests.post(API_URL, data=data, timeout=10)
+                resp_json = resp.json()
+                records = resp_json.get('data', [])
+                
+                exists = False
+                for r in records:
+                    c1 = (r.get('cont_no') or '').strip().upper()
+                    c2 = (r.get('xcont_no') or '').strip().upper()
+                    target = container_no.upper()
+                    if target and (c1 == target or c2 == target):
+                        exists = True
+                        break
+                        
+                if not exists and len(records) > 0:
+                    exists = True
+                    
+                if exists:
+                    log(f"Skipped {path.name}, container {container_no} already exists on MTI web.")
+                    return
+        except Exception as e:
+            log(f"MTI check failed for {path.name}: {e}", logging.WARNING)
+
+    # 4) POST (with small retry/backoff)
     attempts = 0
     backoff = 2
     while True:

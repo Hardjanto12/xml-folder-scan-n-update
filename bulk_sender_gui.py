@@ -72,6 +72,10 @@ class BulkSenderApp:
         ttk.Button(controls, text="Scan Folder", style="Office.TButton", command=self.scan_folder).pack(side="left", padx=(0, 5))
         ttk.Button(controls, text="Select All", style="Office.TButton", command=self.select_all).pack(side="left", padx=(0, 5))
         ttk.Button(controls, text="Deselect All", style="Office.TButton", command=self.deselect_all).pack(side="left", padx=(0, 5))
+        
+        self.skip_existing_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls, text="Skip if exists on MTI Web", variable=self.skip_existing_var).pack(side="left", padx=(10, 5))
+        
         ttk.Button(controls, text="Send Selected", style="Office.TButton", command=self.send_selected).pack(side="right")
         
         table_frame = ttk.Frame(main)
@@ -178,10 +182,21 @@ class BulkSenderApp:
         ftp_var = tk.StringVar(value=self._config.get("ftp_base", "import"))
         ttk.Combobox(top, textvariable=ftp_var, values=("import", "export"), state="readonly").pack(fill="x", padx=10)
         
+        skip_var = tk.BooleanVar(value=self._config.get("skip_existing", True))
+        ttk.Checkbutton(top, text="Skip if exists on MTI Web (Auto-Check)", variable=skip_var).pack(anchor="w", padx=10, pady=10)
+        
         def save():
-            update_config(watch_dir=watch_var.get(), url=url_var.get(), ftp_base=ftp_var.get())
+            update_config(
+                watch_dir=watch_var.get(),
+                url=url_var.get(),
+                ftp_base=ftp_var.get(),
+                skip_existing=skip_var.get()
+            )
             backend.reload_runtime_config()
             self._config = backend.current_config()
+            # Also update the GUI main checkbox to match new settings
+            self.skip_existing_var.set(self._config.get("skip_existing", True))
+            
             self.watch_info_var.set(f"Folder: {self._config['watch_dir']}")
             self.url_info_var.set(f"Endpoint: {self._config['url']}")
             top.destroy()
@@ -210,7 +225,9 @@ class BulkSenderApp:
                             picno = (idr_img.findtext('PICNO') or '').strip()
                             scan_time = (idr_img.findtext('SCANTIME') or '').strip()
                             
-                            container_elem = root.find('.//IDR_SII_INPUTINFO_CONTAINER/CONTAINER_NO')
+                            container_elem = root.find('.//IDR_SII_INPUTINFO_CONTAINER/container_no')
+                            if container_elem is None:
+                                container_elem = root.find('.//IDR_SII_INPUTINFO_CONTAINER/CONTAINER_NO')
                             if container_elem is not None and (container_elem.text or '').strip():
                                 container_no = (container_elem.text or '').strip()
                             else:
@@ -282,10 +299,67 @@ class BulkSenderApp:
             messagebox.showinfo("Info", "No pending files selected.")
             return
             
+        skip_existing = self.skip_existing_var.get()
+        module = self._config.get("ftp_base", "import")
+            
         def worker():
+            import requests
+            API_URL = 'http://10.226.52.34/dashxray/service/webservice.php'
+            
             for idx, f in selected_files:
                 path = f['path']
+                container_no = f.get('container_no', '').strip()
+                
                 f['status'] = 'Processing...'
+                self.root.after(0, self.refresh_tree_item, idx)
+                
+                # Check MTI Web
+                if skip_existing and container_no:
+                    f['status'] = 'Checking MTI...'
+                    self.root.after(0, self.refresh_tree_item, idx)
+                    try:
+                        action = 'get_export' if module == 'export' else 'get_import'
+                        data = {
+                            'action': action,
+                            'module': module,
+                            'draw': '1',
+                            'start': '0',
+                            'length': '10',
+                            'cont_no': container_no,
+                            'doc_no': ''
+                        }
+                        if module == 'import':
+                            data['imp_doc'] = ''
+                        else:
+                            data['exp_doc'] = ''
+                            
+                        resp = requests.post(API_URL, data=data, timeout=10)
+                        resp_json = resp.json()
+                        records = resp_json.get('data', [])
+                        
+                        exists = False
+                        for r in records:
+                            c1 = (r.get('cont_no') or '').strip().upper()
+                            c2 = (r.get('xcont_no') or '').strip().upper()
+                            target = container_no.upper()
+                            if target and (c1 == target or c2 == target):
+                                exists = True
+                                break
+                        
+                        if not exists and len(records) > 0:
+                            # fallback if exact match wasn't found but API returned records
+                            exists = True
+                            
+                        if exists:
+                            f['status'] = 'Skipped (Exists)'
+                            backend.log(f"Skipped {path.name}, container {container_no} already exists on MTI web.")
+                            self.root.after(0, self.refresh_tree_item, idx)
+                            continue
+                            
+                    except Exception as e:
+                        backend.log(f"MTI check failed for {container_no}: {e}", logging.WARNING)
+                
+                f['status'] = 'Sending...'
                 self.root.after(0, self.refresh_tree_item, idx)
                 
                 try:

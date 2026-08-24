@@ -289,6 +289,14 @@ class WatcherApp:
             state="readonly",
         )
         ftp_combo.grid(row=2, column=1, sticky="w", padx=(10, 0))
+        
+        ttk.Label(form, text="Skip Existing", style="Office.TLabel").grid(row=3, column=0, sticky="w", pady=4)
+        self.settings_skip_existing_var = tk.BooleanVar(value=self._config.get("skip_existing", True))
+        ttk.Checkbutton(
+            form, 
+            text="Check MTI Web before sending", 
+            variable=self.settings_skip_existing_var
+        ).grid(row=3, column=1, sticky="w", padx=(10, 0))
 
         ttk.Label(
             container,
@@ -350,7 +358,12 @@ class WatcherApp:
                 return
 
         try:
-            update_config(watch_dir=watch_dir, url=url, ftp_base=ftp_base)
+            update_config(
+                watch_dir=watch_dir, 
+                url=url, 
+                ftp_base=ftp_base,
+                skip_existing=self.settings_skip_existing_var.get()
+            )
         except Exception as exc:
             logger.exception("Failed to save configuration changes")
             messagebox.showerror("Settings", f"Failed to save settings:\n{exc}", parent=self.root)

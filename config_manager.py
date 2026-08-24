@@ -21,6 +21,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "watch_dir": r"D:\Image\62001FS04",
     "url": "http://10.226.52.32:8040/services/xRaySby/in",
     "ftp_base": DEFAULT_FTP_BASE,
+    "skip_existing": True,
 }
 
 def get_app_base_dir() -> Path:
